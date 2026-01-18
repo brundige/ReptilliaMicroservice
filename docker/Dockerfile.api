@@ -1,0 +1,56 @@
+# =============================================================================
+# Reptilia API Dockerfile
+# =============================================================================
+# Multi-stage build for smaller final image
+# Build context should be set to project root in docker-compose
+
+# -----------------------------------------------------------------------------
+# Stage 1: Builder
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim as builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libc-dev \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies
+COPY api/requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# -----------------------------------------------------------------------------
+# Stage 2: Runtime
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim as runtime
+
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy application code - preserve api/ directory structure for imports
+COPY api/ ./api/
+
+# Set Python path
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# Default environment variables
+ENV MONGODB_URI=mongodb://mongodb:27017
+ENV MONGODB_DATABASE=reptilia
+
+# Expose API port
+EXPOSE 8000
+
+# Run with uvicorn (module path: api.main:app)
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

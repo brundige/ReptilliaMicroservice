@@ -1,0 +1,168 @@
+
+# =============================================================================
+# Reptilia Microservice - Docker Compose
+# =============================================================================
+#
+# RASPBERRY PI DEPLOYMENT:
+#   cd docker
+#   docker-compose --profile ble up -d    # Full stack with BLE support
+#
+# iPad Monitoring URLs (replace PI_IP with your Pi's IP):
+#   Dashboard:  http://PI_IP:8000/api/dashboard
+#   API Docs:   http://PI_IP:8000/docs
+#   Logs:       http://PI_IP:8000/api/logs/stream
+#
+# DEVELOPMENT (macOS - no BLE in Docker):
+#   docker-compose up -d mongodb api      # Start MongoDB + API only
+#   cd ../service && python main.py       # Run service natively for BLE
+#
+# For MongoDB web UI (http://localhost:8081):
+#   docker-compose --profile tools up -d
+#
+# Stop services:
+#   docker-compose down               # Stop all services
+#   docker-compose down -v            # Stop and remove data volumes
+#
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # MongoDB Database
+  # ---------------------------------------------------------------------------
+  mongodb:
+    image: mongo:7.0
+    container_name: reptilia-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    environment:
+      # For production, uncomment and set authentication:
+      # MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:-admin}
+      # MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-changeme}
+      MONGO_INITDB_DATABASE: reptilia
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - reptilia-network
+
+  # ---------------------------------------------------------------------------
+  # Reptilia API (REST endpoints for iPad monitoring)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: reptilia-api
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017
+      MONGODB_DATABASE: reptilia
+      CORS_ORIGINS: '["*"]'
+    volumes:
+      # Share log file with service for log streaming
+      - reptilia_logs:/app/logs
+    networks:
+      - reptilia-network
+
+  # ---------------------------------------------------------------------------
+  # Reptilia Service (Bridge Network - No BLE, for testing)
+  # ---------------------------------------------------------------------------
+  service:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: reptilia-service
+    restart: unless-stopped
+    profiles:
+      - no-ble
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    env_file:
+      - ../service/.env
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017
+      LOG_FILE: /app/logs/service.log
+    volumes:
+      - reptilia_logs:/app/logs
+    networks:
+      - reptilia-network
+
+  # ---------------------------------------------------------------------------
+  # Reptilia Service (Host Network - BLE Support for Pi)
+  # ---------------------------------------------------------------------------
+  # Use: docker-compose --profile ble up -d
+  service-ble:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: reptilia-service-ble
+    restart: unless-stopped
+    profiles:
+      - ble
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      api:
+        condition: service_started
+    env_file:
+      - ../service/.env
+    environment:
+      # With host network, MongoDB is accessed via localhost
+      MONGODB_URI: mongodb://localhost:27017
+      LOG_FILE: /app/logs/service.log
+    volumes:
+      - reptilia_logs:/app/logs
+    # Required for Bluetooth Low Energy access on Pi
+    privileged: true
+    network_mode: host
+
+  # ---------------------------------------------------------------------------
+  # MongoDB Express (Optional - Web UI for MongoDB)
+  # ---------------------------------------------------------------------------
+  mongo-express:
+    image: mongo-express:latest
+    container_name: reptilia-mongo-express
+    restart: unless-stopped
+    profiles:
+      - tools
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongodb:27017
+      ME_CONFIG_BASICAUTH: "false"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - reptilia-network
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  reptilia-network:
+    driver: bridge
+
+# =============================================================================
+# Volumes (persistent storage)
+# =============================================================================
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+  reptilia_logs:
+    driver: local

@@ -1,0 +1,6 @@
+# Requirements for Docker (Linux) - excludes macOS-specific packages
+astral>=3.2
+bleak>=0.21.0
+pymongo>=4.6.0
+python-dotenv
+python-kasa

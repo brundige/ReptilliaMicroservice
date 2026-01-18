@@ -1,5 +1,7 @@
-from dataclasses import dataclass
-from datetime import datetime
+# domain/models.py
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, List
 
@@ -12,12 +14,12 @@ class SensorType(Enum):
 
 
 class SensorUnit(Enum):
-    CELSIUS = "*C"
-    FAHRENHEIT = "*F"
+    CELSIUS = "°C"
+    FAHRENHEIT = "°F"
     PERCENT = "%"
 
 
-class OutletState(Enum):
+class OutletStateEnum(Enum):
     ON = "on"
     OFF = "off"
     UNKNOWN = "unknown"
@@ -38,7 +40,6 @@ class ReptileSpecies(Enum):
 
 
 class ComparisonOperator(Enum):
-
     """Comparison operators for automation rules"""
     LESS_THAN = 'lt'
     GREATER_THAN = 'gt'
@@ -47,6 +48,14 @@ class ComparisonOperator(Enum):
     EQUAL = 'eq'
 
 
+class ControlMode(Enum):  # Added: needed for OutletState
+    MANUAL = "manual"
+    AUTOMATIC = "automatic"
+    OVERRIDE = "override"
+
+
+# ========== Domain Models ==========
+
 @dataclass
 class SensorReading:
     sensor_id: str
@@ -54,6 +63,20 @@ class SensorReading:
     timestamp: datetime
     unit: SensorUnit
     is_valid: bool = True
+
+
+@dataclass
+class SensorMetadata:  # Added: needed by ports
+    """Metadata about a sensor"""
+    sensor_id: str
+    sensor_type: SensorType
+    unit: SensorUnit
+    location: str
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    accuracy: Optional[float] = None
 
 
 @dataclass
@@ -76,8 +99,12 @@ class HabitatRequirements:
     humidity_min: float
     humidity_max: float
 
+    # UVB lighting requirements
+    uvb_required: bool = False
+    uvb_hours_per_day: Optional[float] = None  # How many hours of UVB per day
+    uvb_start_time: Optional[str] = None  # When to turn on UVB (24hr format, e.g., "08:00")
+
     # Optional
-    uv_required: bool = False
     substrate_type: Optional[str] = None
     notes: Optional[str] = None
 
@@ -200,7 +227,7 @@ class Threshold:
             outlet_id=outlet_id,
             trigger_value=self.min_value,
             trigger_operator='lt',
-            action_on_trigger=OutletState.ON,
+            action_on_trigger=OutletStateEnum.ON,  # Fixed: was OutletState.ON
             action_on_clear=None,
             hysteresis=self.hysteresis,
             min_duration_seconds=300
@@ -216,7 +243,7 @@ class Threshold:
             outlet_id=outlet_id,
             trigger_value=self.max_value,
             trigger_operator='gte',
-            action_on_trigger=OutletState.OFF,
+            action_on_trigger=OutletStateEnum.OFF,  # Fixed: was OutletState.OFF
             action_on_clear=None,
             hysteresis=self.hysteresis,
             min_duration_seconds=300
@@ -245,7 +272,7 @@ class Threshold:
             outlet_id=outlet_id,
             trigger_value=self.min_value,
             trigger_operator='lt',
-            action_on_trigger=OutletState.ON,
+            action_on_trigger=OutletStateEnum.ON,  # Fixed
             action_on_clear=None,
             hysteresis=self.hysteresis,
             min_duration_seconds=600  # Humidity changes slowly, wait longer
@@ -261,7 +288,7 @@ class Threshold:
             outlet_id=outlet_id,
             trigger_value=self.max_value,
             trigger_operator='gte',
-            action_on_trigger=OutletState.OFF,
+            action_on_trigger=OutletStateEnum.OFF,  # Fixed
             action_on_clear=None,
             hysteresis=self.hysteresis,
             min_duration_seconds=600
@@ -284,8 +311,8 @@ class AutomationRule:
 
     trigger_value: float
     trigger_operator: str  # 'lt', 'gt', 'lte', 'gte', 'eq'
-    action_on_trigger: OutletState
-    action_on_clear: Optional[OutletState] = None
+    action_on_trigger: OutletStateEnum  # Fixed: was OutletState
+    action_on_clear: Optional[OutletStateEnum] = None  # Fixed
 
     # Prevent rapid cycling
     min_duration_seconds: int = 300  # 5 minutes
@@ -303,8 +330,7 @@ class AutomationRule:
 
         # Check cooldown period
         if self.last_triggered:
-            from datetime import datetime
-            elapsed = (datetime.utcnow() - self.last_triggered).total_seconds()
+            elapsed = (datetime.now(timezone.utc) - self.last_triggered).total_seconds()
             if elapsed < self.min_duration_seconds:
                 return False
 
@@ -374,7 +400,7 @@ class AutomationRule:
                 outlet_id=outlet_id,
                 trigger_value=threshold.min_value,
                 trigger_operator='lt',
-                action_on_trigger=OutletState.ON,
+                action_on_trigger=OutletStateEnum.ON,  # Fixed
                 action_on_clear=None,
                 hysteresis=threshold.hysteresis,
                 min_duration_seconds=300
@@ -388,7 +414,7 @@ class AutomationRule:
                 outlet_id=outlet_id,
                 trigger_value=threshold.max_value,
                 trigger_operator='gte',
-                action_on_trigger=OutletState.OFF,
+                action_on_trigger=OutletStateEnum.OFF,  # Fixed
                 action_on_clear=None,
                 hysteresis=threshold.hysteresis,
                 min_duration_seconds=300
@@ -402,7 +428,7 @@ class AutomationRule:
                 outlet_id=outlet_id,
                 trigger_value=threshold.min_value,
                 trigger_operator='lt',
-                action_on_trigger=OutletState.ON,
+                action_on_trigger=OutletStateEnum.ON,  # Fixed
                 action_on_clear=None,
                 hysteresis=threshold.hysteresis,
                 min_duration_seconds=600
@@ -416,10 +442,67 @@ class AutomationRule:
                 outlet_id=outlet_id,
                 trigger_value=threshold.max_value,
                 trigger_operator='gte',
-                action_on_trigger=OutletState.OFF,
+                action_on_trigger=OutletStateEnum.OFF,  # Fixed
                 action_on_clear=None,
                 hysteresis=threshold.hysteresis,
                 min_duration_seconds=600
             )
         else:
             raise ValueError(f"Unknown action_type: {action_type}")
+
+
+@dataclass
+class OutletState:  # Added: complete OutletState model
+    """Current state of an outlet"""
+    outlet_id: str
+    state: OutletStateEnum
+    last_changed: datetime
+    mode: ControlMode = ControlMode.AUTOMATIC
+    power_watts: Optional[float] = None
+
+
+@dataclass
+class OutletCommand:  # Added: needed by services
+    """A command to change outlet state"""
+    command_id: str
+    outlet_id: str
+    desired_state: OutletStateEnum
+    reason: str
+    triggered_by_sensor: Optional[str] = None
+    triggered_by_user: Optional[str] = None
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    executed: bool = False
+    execution_result: Optional[str] = None
+
+
+@dataclass
+class Alert:  # Added: needed by services
+    """An alert notification"""
+    alert_id: str
+    sensor_id: str
+    severity: AlertLevel
+    message: str
+    value: float
+    threshold_violated: Optional[str] = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    acknowledged: bool = False
+    acknowledged_at: Optional[datetime] = None
+    acknowledged_by: Optional[str] = None
+
+
+@dataclass
+class HabitatDayNightConfig:
+    """
+    Configuration for day/night control of a habitat.
+
+    Used by DayNightService to track which outlets and rules to control
+    during day/night transitions.
+    """
+    habitat_id: str
+    uvb_outlet_id: Optional[str]
+    heat_lamp_outlet_id: Optional[str]
+    ceramic_heater_outlet_id: Optional[str]
+    cool_temp_sensor_id: Optional[str]
+    night_temp_min: float
+    night_temp_max: float
+    daytime_heat_rule_ids: List[str] = field(default_factory=list)

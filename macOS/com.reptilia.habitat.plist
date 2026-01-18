@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Service identifier -->
+    <key>Label</key>
+    <string>com.reptilia.habitat</string>
+
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/Users/chrisbrundige/IdeaProjects/ReptilliaMicroservice/service</string>
+
+    <!-- Command to run (uses project venv) -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/chrisbrundige/IdeaProjects/ReptilliaMicroservice/service/.venv/bin/python</string>
+        <string>/Users/chrisbrundige/IdeaProjects/ReptilliaMicroservice/service/main.py</string>
+    </array>
+
+    <!-- Environment variables file is loaded by python-dotenv in the app -->
+    <!-- But we need PYTHONPATH set -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONPATH</key>
+        <string>/Users/chrisbrundige/IdeaProjects/ReptilliaMicroservice/service</string>
+    </dict>
+
+    <!-- Start when loaded (at login) -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Keep alive - restart if it crashes -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Restart throttling - wait 30 seconds before restarting after crash -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Log files -->
+    <key>StandardOutPath</key>
+    <string>/Users/chrisbrundige/Library/Logs/reptilia-habitat.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/chrisbrundige/Library/Logs/reptilia-habitat-error.log</string>
+
+    <!-- Nice level (lower priority) -->
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>
