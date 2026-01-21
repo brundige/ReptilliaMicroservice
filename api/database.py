@@ -2,8 +2,10 @@
 
 """
 MongoDB connection management for the Reptilia API.
+Supports both local MongoDB and MongoDB Atlas (mongodb+srv://).
 """
 
+import re
 from pymongo import MongoClient
 from pymongo.database import Database
 from typing import Generator
@@ -14,11 +16,18 @@ from api.config import get_settings
 _client: MongoClient | None = None
 
 
+def _mask_connection_string(uri: str) -> str:
+    """Mask password in connection string for safe logging."""
+    return re.sub(r'(://[^:]+:)[^@]+(@)', r'\1****\2', uri)
+
+
 def get_client() -> MongoClient:
     """Get or create MongoDB client."""
     global _client
     if _client is None:
         settings = get_settings()
+        masked_uri = _mask_connection_string(settings.mongodb_uri)
+        print(f"Connecting to MongoDB at {masked_uri}...")
         _client = MongoClient(settings.mongodb_uri)
     return _client
 

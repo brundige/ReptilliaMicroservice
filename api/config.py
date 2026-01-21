@@ -11,7 +11,7 @@ from functools import lru_cache
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    # MongoDB
+    # MongoDB (supports both local and Atlas mongodb+srv:// URIs)
     mongodb_uri: str = "mongodb://localhost:27017"
     mongodb_database: str = "reptilia"
 

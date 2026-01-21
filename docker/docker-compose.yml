@@ -3,21 +3,32 @@
 # Reptilia Microservice - Docker Compose
 # =============================================================================
 #
-# RASPBERRY PI DEPLOYMENT:
+# MONGODB ATLAS (CLOUD) DEPLOYMENT:
+#   1. Create a .env file in the docker/ directory with:
+#      MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/?appName=reptilia
+#      MONGODB_DATABASE=reptilia
+#
+#   2. Start services:
+#      cd docker
+#      docker-compose up -d api              # API only
+#      docker-compose --profile ble up -d    # Full stack with BLE support (Pi)
+#
+# RASPBERRY PI DEPLOYMENT (with Atlas):
 #   cd docker
-#   docker-compose --profile ble up -d    # Full stack with BLE support
+#   docker-compose --profile ble up -d
+#
+# LOCAL MONGODB DEPLOYMENT (for development):
+#   cd docker
+#   docker-compose --profile local-db up -d api  # Start local MongoDB + API
+#   cd ../service && python main.py              # Run service natively for BLE
 #
 # iPad Monitoring URLs (replace PI_IP with your Pi's IP):
 #   Dashboard:  http://PI_IP:8000/api/dashboard
 #   API Docs:   http://PI_IP:8000/docs
 #   Logs:       http://PI_IP:8000/api/logs/stream
 #
-# DEVELOPMENT (macOS - no BLE in Docker):
-#   docker-compose up -d mongodb api      # Start MongoDB + API only
-#   cd ../service && python main.py       # Run service natively for BLE
-#
-# For MongoDB web UI (http://localhost:8081):
-#   docker-compose --profile tools up -d
+# For MongoDB web UI (local only, http://localhost:8081):
+#   docker-compose --profile local-db --profile tools up -d
 #
 # Stop services:
 #   docker-compose down               # Stop all services
@@ -27,12 +38,15 @@
 
 services:
   # ---------------------------------------------------------------------------
-  # MongoDB Database
+  # MongoDB Database (Optional - for local development only)
+  # Use --profile local-db to start this service
   # ---------------------------------------------------------------------------
   mongodb:
     image: mongo:7.0
     container_name: reptilia-mongodb
     restart: unless-stopped
+    profiles:
+      - local-db
     ports:
       - "27017:27017"
     volumes:
@@ -54,6 +68,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # Reptilia API (REST endpoints for iPad monitoring)
+  # Connects to MongoDB Atlas by default, or local MongoDB with --profile local-db
   # ---------------------------------------------------------------------------
   api:
     build:
@@ -61,14 +76,14 @@ services:
       dockerfile: docker/Dockerfile.api
     container_name: reptilia-api
     restart: unless-stopped
-    depends_on:
-      mongodb:
-        condition: service_healthy
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
-      MONGODB_URI: mongodb://mongodb:27017
-      MONGODB_DATABASE: reptilia
+      # These can be overridden in .env file
+      MONGODB_URI: ${MONGODB_URI:-mongodb+srv://user:password@cluster.mongodb.net/?appName=reptilia}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-reptilia}
       CORS_ORIGINS: '["*"]'
     volumes:
       # Share log file with service for log streaming
@@ -87,13 +102,12 @@ services:
     restart: unless-stopped
     profiles:
       - no-ble
-    depends_on:
-      mongodb:
-        condition: service_healthy
     env_file:
       - ../service/.env
     environment:
-      MONGODB_URI: mongodb://mongodb:27017
+      # MongoDB Atlas connection (override in .env file)
+      MONGODB_URI: ${MONGODB_URI:-mongodb+srv://user:password@cluster.mongodb.net/?appName=reptilia}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-reptilia}
       LOG_FILE: /app/logs/service.log
     volumes:
       - reptilia_logs:/app/logs
@@ -113,15 +127,14 @@ services:
     profiles:
       - ble
     depends_on:
-      mongodb:
-        condition: service_healthy
       api:
         condition: service_started
     env_file:
       - ../service/.env
     environment:
-      # With host network, MongoDB is accessed via localhost
-      MONGODB_URI: mongodb://localhost:27017
+      # MongoDB Atlas connection (override in .env file)
+      MONGODB_URI: ${MONGODB_URI:-mongodb+srv://user:password@cluster.mongodb.net/?appName=reptilia}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-reptilia}
       LOG_FILE: /app/logs/service.log
     volumes:
       - reptilia_logs:/app/logs
@@ -130,7 +143,8 @@ services:
     network_mode: host
 
   # ---------------------------------------------------------------------------
-  # MongoDB Express (Optional - Web UI for MongoDB)
+  # MongoDB Express (Optional - Web UI for local MongoDB only)
+  # Use: docker-compose --profile local-db --profile tools up -d
   # ---------------------------------------------------------------------------
   mongo-express:
     image: mongo-express:latest

@@ -4,11 +4,18 @@
 MongoDB connection manager for the Reptile Habitat Automation System.
 
 Provides a singleton connection pool and database reference.
+Supports both local MongoDB and MongoDB Atlas (mongodb+srv://).
 """
 
+import re
 from typing import Optional
 from pymongo import MongoClient
 from pymongo.database import Database
+
+
+def _mask_connection_string(uri: str) -> str:
+    """Mask password in connection string for safe logging."""
+    return re.sub(r'(://[^:]+:)[^@]+(@)', r'\1****\2', uri)
 
 
 class MongoDBConnection:
@@ -16,7 +23,15 @@ class MongoDBConnection:
     Singleton MongoDB connection manager.
 
     Usage:
+        # Local MongoDB
         conn = MongoDBConnection(uri="mongodb://localhost:27017", database="reptilia")
+
+        # MongoDB Atlas
+        conn = MongoDBConnection(
+            uri="mongodb+srv://user:password@cluster.mongodb.net/?appName=myapp",
+            database="reptilia"
+        )
+
         db = conn.get_database()
         collection = db["sensor_readings"]
     """
@@ -39,7 +54,7 @@ class MongoDBConnection:
         Initialize MongoDB connection.
 
         Args:
-            uri: MongoDB connection URI
+            uri: MongoDB connection URI (supports mongodb:// and mongodb+srv://)
             database: Database name to use
         """
         if self._client is None:
@@ -49,7 +64,8 @@ class MongoDBConnection:
 
     def _connect(self):
         """Establish connection to MongoDB."""
-        print(f"Connecting to MongoDB at {self._uri}...")
+        masked_uri = _mask_connection_string(self._uri)
+        print(f"Connecting to MongoDB at {masked_uri}...")
         self._client = MongoClient(self._uri)
         self._database = self._client[self._database_name]
 
