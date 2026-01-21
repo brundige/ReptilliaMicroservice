@@ -11,11 +11,11 @@
 #   2. Start services:
 #      cd docker
 #      docker-compose up -d api              # API only
-#      docker-compose --profile ble up -d    # Full stack with BLE support (Pi)
+#      docker-compose --profile pi up -d     # Full stack with BLE support (Pi)
 #
 # RASPBERRY PI DEPLOYMENT (with Atlas):
 #   cd docker
-#   docker-compose --profile ble up -d
+#   docker-compose --profile pi up -d
 #
 # LOCAL MONGODB DEPLOYMENT (for development):
 #   cd docker
@@ -117,15 +117,15 @@ services:
   # ---------------------------------------------------------------------------
   # Reptilia Service (Host Network - BLE Support for Pi)
   # ---------------------------------------------------------------------------
-  # Use: docker-compose --profile ble up -d
-  service-ble:
+  # Use: docker-compose --profile pi up -d
+  service-pi:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: reptilia-service-ble
+    container_name: reptilia-service-pi
     restart: unless-stopped
     profiles:
-      - ble
+      - pi
     depends_on:
       api:
         condition: service_started
