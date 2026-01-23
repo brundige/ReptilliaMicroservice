@@ -18,8 +18,8 @@ from api.models.schemas import (
     HabitatCreate,
     HabitatResponse,
     HabitatStatusResponse,
-    SensorConfig,
-    OutletConfig,
+    SensorConfigMapping as SensorConfig,
+    OutletConfigMapping as OutletConfig,
     # Species
     SpeciesRequirementsResponse,
     # Sensors
