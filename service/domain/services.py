@@ -30,7 +30,11 @@ from domain.models import (
     OutletCommand,
     Alert,
     AlertLevel,
-    HabitatDayNightConfig
+    HabitatDayNightConfig,
+    SensorConfig,
+    SensorLocation,
+    OutletConfig,
+    PowerStripConfig
 )
 
 from domain.ports import (
@@ -100,7 +104,8 @@ class SensorMonitoringService:
             sensor_id: str,
             value: float,
             timestamp: Optional[datetime] = None,
-            unit: Optional[SensorUnit] = None
+            unit: Optional[SensorUnit] = None,
+            habitat_id: Optional[str] = None
     ) -> SensorReading:
         """
         Main business logic: Process a sensor reading.
@@ -118,6 +123,7 @@ class SensorMonitoringService:
             value: The measured value
             timestamp: When reading was taken (uses current time if not provided)
             unit: Unit of measurement (CELSIUS or PERCENT)
+            habitat_id: Optional habitat this reading belongs to
 
         Returns:
             SensorReading object with validation status
@@ -136,7 +142,8 @@ class SensorMonitoringService:
             value=value,
             timestamp=timestamp,
             unit=unit,
-            is_valid=True
+            is_valid=True,
+            habitat_id=habitat_id
         )
 
         # Log processing
@@ -786,7 +793,9 @@ class HabitatManagementService:
             name: str,
             species: ReptileSpecies,
             sensor_config: dict,
-            outlet_config: dict
+            outlet_config: dict,
+            sensors: Optional[List[SensorConfig]] = None,
+            power_strip: Optional[PowerStripConfig] = None
     ) -> Habitat:
         """
         Complete habitat setup workflow.
@@ -807,6 +816,8 @@ class HabitatManagementService:
                           {'basking_temp': 'sensor-1', 'cool_temp': 'sensor-2', 'humidity': 'sensor-3'}
             outlet_config: Dict mapping equipment to outlet IDs
                           {'heat_lamp': 'outlet-1', 'humidifier': 'outlet-2'}
+            sensors: Optional list of SensorConfig objects with BLE addresses
+            power_strip: Optional PowerStripConfig with IP, credentials, and outlet mapping
 
         Returns:
             Habitat object with complete configuration
@@ -827,16 +838,18 @@ class HabitatManagementService:
             }
         )
 
-        # 2. Create habitat model
+        # 2. Create habitat model with embedded hardware config
         habitat = Habitat(
             habitat_id=habitat_id,
             name=name,
             species=species,
             requirements=requirements,
-            basking_temp_sensor_id=sensor_config.get('basking_temp'),
-            cool_temp_sensor_id=sensor_config.get('cool_temp'),
-            humidity_sensor_id=sensor_config.get('humidity'),
-            heat_lamp_outlet_id=outlet_config.get('heat_lamp'),
+            sensors=sensors or [],
+            power_strip=power_strip,
+            basking_temp_sensor_id=sensor_config.get('basking_temp', ''),
+            cool_temp_sensor_id=sensor_config.get('cool_temp', ''),
+            humidity_sensor_id=sensor_config.get('humidity', ''),
+            heat_lamp_outlet_id=outlet_config.get('heat_lamp', ''),
             ceramic_heater_outlet_id=outlet_config.get('ceramic_heater'),
             uvb_outlet_id=outlet_config.get('uvb'),
             humidifier_outlet_id=outlet_config.get('humidifier'),

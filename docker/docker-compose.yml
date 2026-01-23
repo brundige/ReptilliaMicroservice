@@ -3,7 +3,7 @@
 # Reptilia Microservice - Docker Compose
 # =============================================================================
 #
-# RASPBERRY PI DEPLOYMENT:
+# RASPBERRY PI DEPLOYMENT (with MongoDB Atlas):
 #   cd docker
 #   docker-compose --profile ble up -d    # Full stack with BLE support
 #
@@ -13,11 +13,14 @@
 #   Logs:       http://PI_IP:8000/api/logs/stream
 #
 # DEVELOPMENT (macOS - no BLE in Docker):
-#   docker-compose up -d mongodb api      # Start MongoDB + API only
+#   docker-compose up -d api              # Start API only (uses Atlas)
 #   cd ../service && python main.py       # Run service natively for BLE
 #
-# For MongoDB web UI (http://localhost:8081):
-#   docker-compose --profile tools up -d
+# LOCAL MONGODB (optional - for offline development):
+#   docker-compose --profile local-db up -d mongodb api
+#
+# For MongoDB web UI (local only, http://localhost:8081):
+#   docker-compose --profile local-db --profile tools up -d
 #
 # Stop services:
 #   docker-compose down               # Stop all services
@@ -27,21 +30,20 @@
 
 services:
   # ---------------------------------------------------------------------------
-  # MongoDB Database
+  # MongoDB Database (Optional - for local development)
   # ---------------------------------------------------------------------------
   mongodb:
     image: mongo:7.0
     container_name: reptilia-mongodb
     restart: unless-stopped
+    profiles:
+      - local-db
     ports:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb
     environment:
-      # For production, uncomment and set authentication:
-      # MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:-admin}
-      # MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-changeme}
       MONGO_INITDB_DATABASE: reptilia
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
@@ -61,17 +63,15 @@ services:
       dockerfile: docker/Dockerfile.api
     container_name: reptilia-api
     restart: unless-stopped
-    depends_on:
-      mongodb:
-        condition: service_healthy
     ports:
       - "8000:8000"
+    env_file:
+      - ../service/.env
     environment:
-      MONGODB_URI: mongodb://mongodb:27017
-      MONGODB_DATABASE: reptilia
+      # MONGODB_URI comes from .env file (Atlas connection string)
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-reptilia}
       CORS_ORIGINS: '["*"]'
     volumes:
-      # Share log file with service for log streaming
       - reptilia_logs:/app/logs
     networks:
       - reptilia-network
@@ -87,13 +87,9 @@ services:
     restart: unless-stopped
     profiles:
       - no-ble
-    depends_on:
-      mongodb:
-        condition: service_healthy
     env_file:
       - ../service/.env
     environment:
-      MONGODB_URI: mongodb://mongodb:27017
       LOG_FILE: /app/logs/service.log
     volumes:
       - reptilia_logs:/app/logs
@@ -113,24 +109,22 @@ services:
     profiles:
       - ble
     depends_on:
-      mongodb:
-        condition: service_healthy
       api:
         condition: service_started
     env_file:
       - ../service/.env
     environment:
-      # With host network, MongoDB is accessed via localhost
-      MONGODB_URI: mongodb://localhost:27017
       LOG_FILE: /app/logs/service.log
     volumes:
       - reptilia_logs:/app/logs
+      # D-Bus socket required for BlueZ/Bluetooth access
+      - /var/run/dbus:/var/run/dbus
     # Required for Bluetooth Low Energy access on Pi
     privileged: true
     network_mode: host
 
   # ---------------------------------------------------------------------------
-  # MongoDB Express (Optional - Web UI for MongoDB)
+  # MongoDB Express (Optional - Web UI for local MongoDB only)
   # ---------------------------------------------------------------------------
   mongo-express:
     image: mongo-express:latest

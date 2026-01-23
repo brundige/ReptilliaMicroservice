@@ -371,3 +371,35 @@ class KasaOutletController(OutletController):
     def is_available(self) -> bool:
         """Check if Kasa library is available."""
         return KASA_AVAILABLE
+
+    @classmethod
+    def from_config(
+        cls,
+        config: 'PowerStripConfig',
+        connection_timeout: float = 10.0
+    ) -> 'KasaOutletController':
+        """
+        Factory method to create controller from PowerStripConfig.
+
+        Args:
+            config: PowerStripConfig object from habitat configuration
+            connection_timeout: Connection timeout in seconds
+
+        Returns:
+            Configured KasaOutletController instance
+        """
+        # Import here to avoid circular imports
+        from domain.models import PowerStripConfig
+
+        # Build outlet mapping from config
+        outlet_mapping = {}
+        for outlet in config.outlets:
+            outlet_mapping[outlet.outlet_id] = outlet.plug_number
+
+        return cls(
+            ip_address=config.ip,
+            username=config.username,
+            password=config.password,
+            outlet_mapping=outlet_mapping,
+            connection_timeout=connection_timeout
+        )

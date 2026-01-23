@@ -5,6 +5,7 @@ Pydantic schemas for request/response validation.
 """
 
 from datetime import datetime
+from enum import Enum
 from typing import Optional
 from pydantic import BaseModel
 
@@ -26,17 +27,48 @@ from api.models.enums import (
 # Habitat Schemas
 # ============================================================
 
-class SensorConfig(BaseModel):
+class SensorConfigMapping(BaseModel):
+    """Maps zone types to sensor IDs (logical mapping)."""
     basking_temp: str
     cool_temp: str
     humidity: str
 
 
-class OutletConfig(BaseModel):
+class OutletConfigMapping(BaseModel):
+    """Maps equipment types to outlet IDs (logical mapping)."""
     heat_lamp: str
     ceramic_heater: Optional[str] = None
     uvb: Optional[str] = None
     humidifier: Optional[str] = None
+
+
+# NEW: Hardware configuration schemas
+class SensorLocation(str, Enum):
+    WARM_SIDE = "warm_side"
+    COOL_SIDE = "cool_side"
+
+
+class SensorHardwareConfig(BaseModel):
+    """BLE sensor hardware configuration."""
+    sensor_id: str
+    ble_address: str
+    location: SensorLocation
+    device_type: str = "LYWSD03MMC"
+
+
+class OutletHardwareConfig(BaseModel):
+    """Power strip outlet configuration."""
+    outlet_id: str
+    plug_number: int
+
+
+class PowerStripConfig(BaseModel):
+    """Power strip hardware configuration."""
+    strip_id: str
+    ip: str
+    username: str
+    password: str
+    outlets: list[OutletHardwareConfig] = []
 
 
 class HabitatBase(BaseModel):
@@ -46,8 +78,11 @@ class HabitatBase(BaseModel):
 
 class HabitatCreate(HabitatBase):
     habitat_id: str
-    sensor_config: SensorConfig
-    outlet_config: OutletConfig
+    sensor_config: SensorConfigMapping
+    outlet_config: OutletConfigMapping
+    # NEW: Optional embedded hardware configuration
+    sensors: Optional[list[SensorHardwareConfig]] = None
+    power_strip: Optional[PowerStripConfig] = None
 
 
 class HabitatResponse(BaseModel):
@@ -61,6 +96,9 @@ class HabitatResponse(BaseModel):
     ceramic_heater_outlet_id: Optional[str] = None
     uvb_outlet_id: Optional[str] = None
     humidifier_outlet_id: Optional[str] = None
+    # NEW: Embedded hardware configuration
+    sensors: Optional[list[SensorHardwareConfig]] = None
+    power_strip: Optional[PowerStripConfig] = None
 
 
 class CurrentConditions(BaseModel):

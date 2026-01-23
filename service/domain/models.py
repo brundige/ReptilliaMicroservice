@@ -54,6 +54,41 @@ class ControlMode(Enum):  # Added: needed for OutletState
     OVERRIDE = "override"
 
 
+# ========== Sensor Location Enum ==========
+
+class SensorLocation(Enum):
+    WARM_SIDE = "warm_side"
+    COOL_SIDE = "cool_side"
+
+
+# ========== Hardware Configuration Models ==========
+
+@dataclass
+class SensorConfig:
+    """Configuration for a BLE sensor linked to a habitat."""
+    sensor_id: str
+    ble_address: str
+    location: SensorLocation
+    device_type: str = "LYWSD03MMC"
+
+
+@dataclass
+class OutletConfig:
+    """Configuration for an outlet on a power strip."""
+    outlet_id: str
+    plug_number: int
+
+
+@dataclass
+class PowerStripConfig:
+    """Configuration for a Kasa power strip linked to a habitat."""
+    strip_id: str
+    ip: str
+    username: str
+    password: str
+    outlets: List['OutletConfig'] = field(default_factory=list)
+
+
 # ========== Domain Models ==========
 
 @dataclass
@@ -63,6 +98,7 @@ class SensorReading:
     timestamp: datetime
     unit: SensorUnit
     is_valid: bool = True
+    habitat_id: Optional[str] = None
 
 
 @dataclass
@@ -120,17 +156,37 @@ class Habitat:
     species: ReptileSpecies
     requirements: HabitatRequirements  # ← Loaded from DB
 
-    # Which sensors monitor this habitat
-    basking_temp_sensor_id: str
-    cool_temp_sensor_id: str
-    humidity_sensor_id: str
+    # NEW: Hardware configuration embedded in habitat
+    sensors: List[SensorConfig] = field(default_factory=list)
+    power_strip: Optional[PowerStripConfig] = None
 
-    # Which outlets control this habitat
-    heat_lamp_outlet_id: str
+    # Which sensors monitor this habitat (logical IDs referencing sensors list)
+    basking_temp_sensor_id: str = ""
+    cool_temp_sensor_id: str = ""
+    humidity_sensor_id: str = ""
+
+    # Which outlets control this habitat (logical IDs referencing power_strip.outlets)
+    heat_lamp_outlet_id: str = ""
     ceramic_heater_outlet_id: Optional[str] = None  # For cool side/ambient heat
     uvb_outlet_id: Optional[str] = None
     humidifier_outlet_id: Optional[str] = None
     mister_outlet_id: Optional[str] = None
+
+    def get_sensor_config(self, sensor_id: str) -> Optional[SensorConfig]:
+        """Get sensor config by sensor_id."""
+        for sensor in self.sensors:
+            if sensor.sensor_id == sensor_id:
+                return sensor
+        return None
+
+    def get_outlet_config(self, outlet_id: str) -> Optional[OutletConfig]:
+        """Get outlet config by outlet_id."""
+        if not self.power_strip:
+            return None
+        for outlet in self.power_strip.outlets:
+            if outlet.outlet_id == outlet_id:
+                return outlet
+        return None
 
 
 @dataclass

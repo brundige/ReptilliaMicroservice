@@ -29,7 +29,11 @@ from domain.models import (
     Habitat,
     HabitatRequirements,
     ReptileSpecies,
-    Threshold
+    Threshold,
+    SensorConfig,
+    SensorLocation,
+    OutletConfig,
+    PowerStripConfig
 )
 
 
@@ -58,6 +62,11 @@ class MongoDBSensorRepository(SensorRepository):
             [("sensor_id", ASCENDING), ("timestamp", DESCENDING)],
             name="sensor_timestamp_idx"
         )
+        # NEW: Compound index for habitat + time queries
+        self._collection.create_index(
+            [("habitat_id", ASCENDING), ("timestamp", DESCENDING)],
+            name="habitat_timestamp_idx"
+        )
         # TTL index for automatic cleanup after 90 days
         self._collection.create_index(
             "timestamp",
@@ -74,6 +83,9 @@ class MongoDBSensorRepository(SensorRepository):
             "unit": reading.unit.value,
             "is_valid": reading.is_valid
         }
+        # Include habitat_id if present
+        if reading.habitat_id:
+            doc["habitat_id"] = reading.habitat_id
         result = self._collection.insert_one(doc)
         return result.acknowledged
 
@@ -106,9 +118,9 @@ class MongoDBSensorRepository(SensorRepository):
         end_time: datetime
     ) -> List[SensorReading]:
         """Get all readings for a habitat within a time range."""
-        # Note: This simplified implementation returns all readings in the time range
-        # A full implementation would join with habitat config to get sensor IDs
+        # Now uses habitat_id field directly stored on readings
         cursor = self._collection.find({
+            "habitat_id": habitat_id,
             "timestamp": {"$gte": start_time, "$lte": end_time}
         }).sort("timestamp", ASCENDING)
 
@@ -126,7 +138,8 @@ class MongoDBSensorRepository(SensorRepository):
             value=doc["value"],
             timestamp=doc["timestamp"],
             unit=SensorUnit(doc["unit"]),
-            is_valid=doc.get("is_valid", True)
+            is_valid=doc.get("is_valid", True),
+            habitat_id=doc.get("habitat_id")
         )
 
 
@@ -381,15 +394,45 @@ class MongoDBHabitatRepository(HabitatRepository):
         # Load the requirements for this species
         requirements = self.get_requirements(ReptileSpecies(doc["species"]))
 
+        # Parse embedded sensors config
+        sensors = []
+        for sensor_doc in doc.get("sensors", []):
+            sensors.append(SensorConfig(
+                sensor_id=sensor_doc["sensor_id"],
+                ble_address=sensor_doc["ble_address"],
+                location=SensorLocation(sensor_doc["location"]),
+                device_type=sensor_doc.get("device_type", "LYWSD03MMC")
+            ))
+
+        # Parse embedded power_strip config
+        power_strip = None
+        if doc.get("power_strip"):
+            ps_doc = doc["power_strip"]
+            outlets = []
+            for outlet_doc in ps_doc.get("outlets", []):
+                outlets.append(OutletConfig(
+                    outlet_id=outlet_doc["outlet_id"],
+                    plug_number=outlet_doc["plug_number"]
+                ))
+            power_strip = PowerStripConfig(
+                strip_id=ps_doc["strip_id"],
+                ip=ps_doc["ip"],
+                username=ps_doc["username"],
+                password=ps_doc["password"],
+                outlets=outlets
+            )
+
         return Habitat(
             habitat_id=doc["habitat_id"],
             name=doc["name"],
             species=ReptileSpecies(doc["species"]),
             requirements=requirements,
-            basking_temp_sensor_id=doc["basking_temp_sensor_id"],
-            cool_temp_sensor_id=doc["cool_temp_sensor_id"],
-            humidity_sensor_id=doc["humidity_sensor_id"],
-            heat_lamp_outlet_id=doc["heat_lamp_outlet_id"],
+            sensors=sensors,
+            power_strip=power_strip,
+            basking_temp_sensor_id=doc.get("basking_temp_sensor_id", ""),
+            cool_temp_sensor_id=doc.get("cool_temp_sensor_id", ""),
+            humidity_sensor_id=doc.get("humidity_sensor_id", ""),
+            heat_lamp_outlet_id=doc.get("heat_lamp_outlet_id", ""),
             ceramic_heater_outlet_id=doc.get("ceramic_heater_outlet_id"),
             uvb_outlet_id=doc.get("uvb_outlet_id"),
             humidifier_outlet_id=doc.get("humidifier_outlet_id"),
@@ -399,10 +442,39 @@ class MongoDBHabitatRepository(HabitatRepository):
     @staticmethod
     def _habitat_to_doc(habitat: Habitat) -> dict:
         """Convert Habitat to MongoDB document."""
+        # Convert sensors to embedded documents
+        sensors_docs = []
+        for sensor in habitat.sensors:
+            sensors_docs.append({
+                "sensor_id": sensor.sensor_id,
+                "ble_address": sensor.ble_address,
+                "location": sensor.location.value,
+                "device_type": sensor.device_type
+            })
+
+        # Convert power_strip to embedded document
+        power_strip_doc = None
+        if habitat.power_strip:
+            outlets_docs = []
+            for outlet in habitat.power_strip.outlets:
+                outlets_docs.append({
+                    "outlet_id": outlet.outlet_id,
+                    "plug_number": outlet.plug_number
+                })
+            power_strip_doc = {
+                "strip_id": habitat.power_strip.strip_id,
+                "ip": habitat.power_strip.ip,
+                "username": habitat.power_strip.username,
+                "password": habitat.power_strip.password,
+                "outlets": outlets_docs
+            }
+
         return {
             "habitat_id": habitat.habitat_id,
             "name": habitat.name,
             "species": habitat.species.value,
+            "sensors": sensors_docs,
+            "power_strip": power_strip_doc,
             "basking_temp_sensor_id": habitat.basking_temp_sensor_id,
             "cool_temp_sensor_id": habitat.cool_temp_sensor_id,
             "humidity_sensor_id": habitat.humidity_sensor_id,

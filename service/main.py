@@ -56,7 +56,12 @@ from domain.models import (
     SensorUnit,
     SensorMetadata,
     SensorType,
-    OutletStateEnum
+    OutletStateEnum,
+    SensorConfig,
+    SensorLocation,
+    OutletConfig,
+    PowerStripConfig,
+    Habitat
 )
 from domain.services import (
     SensorMonitoringService,
@@ -90,15 +95,80 @@ from adapters.utils.time_providers import (
     FixedSunTimesProvider
 )
 
+# Type alias for sensor map
+from typing import Dict, List, Optional, Tuple
+
+
+def create_sensors_from_habitat(
+    habitat: Habitat,
+    sensor_timeout: float = 30.0,
+    sensor_retries: int = 3,
+    sensor_retry_delay: float = 2.0
+) -> Dict[str, LYWSD03MMCSensor]:
+    """
+    Create sensor instances from habitat configuration.
+
+    Args:
+        habitat: Habitat with embedded sensor configs
+        sensor_timeout: BLE connection timeout
+        sensor_retries: Number of retry attempts
+        sensor_retry_delay: Delay between retries
+
+    Returns:
+        Dict mapping sensor_id to LYWSD03MMCSensor instance
+    """
+    sensors = {}
+    for sensor_config in habitat.sensors:
+        sensor = LYWSD03MMCSensor.from_config(
+            config=sensor_config,
+            connection_timeout=sensor_timeout,
+            max_retries=sensor_retries,
+            retry_delay=sensor_retry_delay
+        )
+        sensors[sensor_config.sensor_id] = sensor
+        print(f"    ✓ Sensor created: {sensor_config.sensor_id} ({sensor_config.location.value})")
+    return sensors
+
+
+def create_outlet_controller_from_habitat(
+    habitat: Habitat,
+    connection_timeout: float = 10.0
+) -> Optional[KasaOutletController]:
+    """
+    Create outlet controller from habitat's power strip configuration.
+
+    Args:
+        habitat: Habitat with embedded power_strip config
+        connection_timeout: Connection timeout
+
+    Returns:
+        KasaOutletController instance or None if no power_strip configured
+    """
+    if not habitat.power_strip:
+        return None
+
+    try:
+        controller = KasaOutletController.from_config(
+            config=habitat.power_strip,
+            connection_timeout=connection_timeout
+        )
+        print(f"    ✓ Power strip created: {habitat.power_strip.strip_id} ({habitat.power_strip.ip})")
+        outlet_ids = [o.outlet_id for o in habitat.power_strip.outlets]
+        print(f"      Outlets: {outlet_ids}")
+        return controller
+    except KasaConnectionError as e:
+        print(f"    ⚠ Kasa connection failed: {e}")
+        return None
+
 
 def create_test_app():
     """
     Create complete application with MongoDB storage.
 
     This uses:
-    - Real Bluetooth sensors (LYWSD03MMC)
+    - Hardware configuration loaded from MongoDB (per-habitat)
     - MongoDB for persistent storage
-    - Mock outlet controller (replace with real smart outlet adapter)
+    - Mock outlet controller as fallback if no power_strip configured
 
     Returns:
         Dict with all services and adapters
@@ -109,38 +179,11 @@ def create_test_app():
     print()
 
     # ═══════════════════════════════════════════════════════════
-    # STEP 1: Create all the ADAPTERS (infrastructure)
+    # STEP 1: Create MongoDB connection and repositories FIRST
     # ═══════════════════════════════════════════════════════════
 
-    print("📦 Creating adapters...")
+    print("📦 Connecting to MongoDB...")
 
-    # Sensor configuration from environment
-    sensor_timeout = float(os.getenv("SENSOR_CONNECTION_TIMEOUT", "30.0"))
-    sensor_retries = int(os.getenv("SENSOR_MAX_RETRIES", "3"))
-    sensor_retry_delay = float(os.getenv("SENSOR_RETRY_DELAY", "2.0"))
-
-    # Real BLE sensors - Xiaomi LYWSD03MMC
-    warm_side_sensor = LYWSD03MMCSensor(
-        device_address=os.getenv("SENSOR_WARM_SIDE_ADDRESS", "BE67157C-68B0-1E7B-141E-89E563048735"),
-        sensor_id=os.getenv("SENSOR_WARM_SIDE_ID", "basking-temp-sensor"),
-        location="warm_side",
-        connection_timeout=sensor_timeout,
-        max_retries=sensor_retries,
-        retry_delay=sensor_retry_delay
-    )
-    print(f'  ✓ Warm side sensor created: {warm_side_sensor._sensor_id}')
-
-    cool_side_sensor = LYWSD03MMCSensor(
-        device_address=os.getenv("SENSOR_COOL_SIDE_ADDRESS", "763137C2-0D36-87EE-F64A-A21B387F16A1"),
-        sensor_id=os.getenv("SENSOR_COOL_SIDE_ID", "cool-temp-sensor"),
-        location="cool_side",
-        connection_timeout=sensor_timeout,
-        max_retries=sensor_retries,
-        retry_delay=sensor_retry_delay
-    )
-    print(f'  ✓ Cool side sensor created: {cool_side_sensor._sensor_id}')
-
-    # MongoDB connection and repositories
     mongo_conn = MongoDBConnection(
         uri=os.getenv("MONGODB_URI", "mongodb://localhost:27017"),
         database=os.getenv("MONGODB_DATABASE", "reptilia")
@@ -153,34 +196,6 @@ def create_test_app():
     threshold_repo = MongoDBThresholdRepository(db)
     print("  ✓ MongoDB threshold repository created")
 
-    # Outlet controller - use Kasa if configured, otherwise fall back to mock
-    kasa_ip = os.getenv("KASA_IP")
-    if kasa_ip:
-        try:
-            # Parse outlet mapping from environment (JSON format)
-            outlet_mapping_json = os.getenv("KASA_OUTLET_MAPPING", "{}")
-            outlet_mapping = json.loads(outlet_mapping_json)
-
-            outlet_controller = KasaOutletController(
-                ip_address=kasa_ip,
-                username=os.getenv("KASA_USERNAME"),
-                password=os.getenv("KASA_PASSWORD"),
-                outlet_mapping=outlet_mapping
-            )
-            print(f"  ✓ Kasa outlet controller created (device: {kasa_ip})")
-            print(f"    Outlet mapping: {outlet_mapping}")
-        except json.JSONDecodeError as e:
-            print(f"  ⚠ Invalid KASA_OUTLET_MAPPING JSON: {e}")
-            print("  ✓ Falling back to mock outlet controller")
-            outlet_controller = MockOutletController()
-        except KasaConnectionError as e:
-            print(f"  ⚠ Kasa connection failed: {e}")
-            print("  ✓ Falling back to mock outlet controller")
-            outlet_controller = MockOutletController()
-    else:
-        outlet_controller = MockOutletController()
-        print("  ✓ Mock outlet controller created (set KASA_IP to use real device)")
-
     outlet_repo = MongoDBOutletRepository(db)
     print("  ✓ MongoDB outlet repository created")
 
@@ -190,14 +205,76 @@ def create_test_app():
     print()
 
     # ═══════════════════════════════════════════════════════════
-    # STEP 2: Create SERVICES (business logic)
+    # STEP 2: Load habitats from MongoDB and create hardware adapters
+    # ═══════════════════════════════════════════════════════════
+
+    print("📦 Loading hardware configuration from MongoDB...")
+
+    # Sensor connection settings from environment (global defaults)
+    sensor_timeout = float(os.getenv("SENSOR_CONNECTION_TIMEOUT", "30.0"))
+    sensor_retries = int(os.getenv("SENSOR_MAX_RETRIES", "3"))
+    sensor_retry_delay = float(os.getenv("SENSOR_RETRY_DELAY", "2.0"))
+
+    # Load all habitats from database
+    habitats = habitat_repo.list_habitats()
+
+    # Storage for all sensors and controllers across habitats
+    all_sensors: Dict[str, LYWSD03MMCSensor] = {}
+    outlet_controllers: Dict[str, KasaOutletController] = {}  # habitat_id -> controller
+    primary_outlet_controller = None
+
+    if habitats:
+        print(f"  Found {len(habitats)} habitat(s) in database")
+
+        for habitat in habitats:
+            print(f"\n  Habitat: {habitat.name} ({habitat.habitat_id})")
+
+            # Create sensors from habitat config
+            if habitat.sensors:
+                habitat_sensors = create_sensors_from_habitat(
+                    habitat,
+                    sensor_timeout=sensor_timeout,
+                    sensor_retries=sensor_retries,
+                    sensor_retry_delay=sensor_retry_delay
+                )
+                all_sensors.update(habitat_sensors)
+
+            # Create outlet controller from habitat config
+            if habitat.power_strip:
+                controller = create_outlet_controller_from_habitat(habitat)
+                if controller:
+                    outlet_controllers[habitat.habitat_id] = controller
+                    if primary_outlet_controller is None:
+                        primary_outlet_controller = controller
+    else:
+        print("  No habitats found in database - will create a new one")
+
+    # Fall back to mock controller if no power strips configured
+    if primary_outlet_controller is None:
+        primary_outlet_controller = MockOutletController()
+        print("  ✓ Using mock outlet controller (no power strip configured)")
+
+    # Create sensor references for backward compatibility
+    # Find warm_side and cool_side sensors
+    warm_side_sensor = None
+    cool_side_sensor = None
+    for sensor_id, sensor in all_sensors.items():
+        if sensor._location == "warm_side":
+            warm_side_sensor = sensor
+        elif sensor._location == "cool_side":
+            cool_side_sensor = sensor
+
+    print()
+
+    # ═══════════════════════════════════════════════════════════
+    # STEP 3: Create SERVICES (business logic)
     # ═══════════════════════════════════════════════════════════
 
     print("⚙️  Creating services...")
 
     # Create automation service (controls outlets)
     automation_service = OutletAutomationService(
-        outlet_controller=outlet_controller,
+        outlet_controller=primary_outlet_controller,
         outlet_repository=outlet_repo,
         time_provider=None,  # Will use datetime.now(timezone.utc) by default
         logger=None  # Will use print() by default
@@ -241,7 +318,7 @@ def create_test_app():
 
     # Create Day/Night Service - manages sunrise/sunset transitions
     day_night_service = DayNightService(
-        outlet_controller=outlet_controller,
+        outlet_controller=primary_outlet_controller,
         automation_service=automation_service,
         sun_times_provider=sun_times_provider,
         time_provider=SystemTimeProvider(),
@@ -250,27 +327,101 @@ def create_test_app():
     print("  ✓ Day/Night service created")
 
     # ═══════════════════════════════════════════════════════════
-    # STEP 3: Set up a TEST HABITAT
+    # STEP 4: Set up habitats (use existing or create sample)
     # ═══════════════════════════════════════════════════════════
 
-    print("🦎 Setting up test habitat...")
+    habitat = None
 
-    habitat = habitat_service.setup_habitat(
-        habitat_id="test-habitat-001",
-        name="Garys Leopard Gecko Enclosure",
-        species=ReptileSpecies.LEOPARD_GECKO,
-        sensor_config={
-            'basking_temp': 'basking-temp-sensor',
-            'cool_temp': 'cool-temp-sensor',
-            'humidity': 'basking-humidity-sensor'
-        },
-        outlet_config={
-            'heat_lamp': 'basking-heat-lamp',
-            'ceramic_heater': 'ambient-heater',
-            'humidifier': 'humidifier',
-            'uvb': 'uvb-light'  # UVB outlet for sunrise/sunset control
-        }
-    )
+    if habitats:
+        # Use first habitat from database
+        habitat = habitats[0]
+        print(f"\n🦎 Using existing habitat from database: {habitat.name}")
+
+        # Set up automation rules for existing habitat
+        habitat = habitat_service.setup_habitat(
+            habitat_id=habitat.habitat_id,
+            name=habitat.name,
+            species=habitat.species,
+            sensor_config={
+                'basking_temp': habitat.basking_temp_sensor_id,
+                'cool_temp': habitat.cool_temp_sensor_id,
+                'humidity': habitat.humidity_sensor_id
+            },
+            outlet_config={
+                'heat_lamp': habitat.heat_lamp_outlet_id,
+                'ceramic_heater': habitat.ceramic_heater_outlet_id,
+                'humidifier': habitat.humidifier_outlet_id,
+                'uvb': habitat.uvb_outlet_id
+            },
+            sensors=habitat.sensors,
+            power_strip=habitat.power_strip
+        )
+    else:
+        # Create sample habitat with embedded hardware config
+        print("\n🦎 Creating sample habitat (no habitats in database)...")
+
+        # Sample sensor configs (will need to be updated via API with real addresses)
+        sample_sensors = [
+            SensorConfig(
+                sensor_id="basking-temp-sensor",
+                ble_address="XX:XX:XX:XX:XX:XX",  # Placeholder
+                location=SensorLocation.WARM_SIDE,
+                device_type="LYWSD03MMC"
+            ),
+            SensorConfig(
+                sensor_id="cool-temp-sensor",
+                ble_address="YY:YY:YY:YY:YY:YY",  # Placeholder
+                location=SensorLocation.COOL_SIDE,
+                device_type="LYWSD03MMC"
+            )
+        ]
+
+        # Sample power strip config (will need to be updated via API)
+        sample_power_strip = PowerStripConfig(
+            strip_id="strip-001",
+            ip="192.168.1.100",  # Placeholder
+            username="user@example.com",
+            password="password",
+            outlets=[
+                OutletConfig(outlet_id="basking-heat-lamp", plug_number=1),
+                OutletConfig(outlet_id="ambient-heater", plug_number=2),
+                OutletConfig(outlet_id="humidifier", plug_number=3),
+                OutletConfig(outlet_id="uvb-light", plug_number=4)
+            ]
+        )
+
+        habitat = habitat_service.setup_habitat(
+            habitat_id="test-habitat-001",
+            name="Garys Leopard Gecko Enclosure",
+            species=ReptileSpecies.LEOPARD_GECKO,
+            sensor_config={
+                'basking_temp': 'basking-temp-sensor',
+                'cool_temp': 'cool-temp-sensor',
+                'humidity': 'basking-temp-sensor'  # Same sensor for temp/humidity
+            },
+            outlet_config={
+                'heat_lamp': 'basking-heat-lamp',
+                'ceramic_heater': 'ambient-heater',
+                'humidifier': 'humidifier',
+                'uvb': 'uvb-light'
+            },
+            sensors=sample_sensors,
+            power_strip=sample_power_strip
+        )
+
+        # Recreate sensors from the new habitat config
+        if habitat.sensors:
+            all_sensors = create_sensors_from_habitat(
+                habitat,
+                sensor_timeout=sensor_timeout,
+                sensor_retries=sensor_retries,
+                sensor_retry_delay=sensor_retry_delay
+            )
+            for sensor_id, sensor in all_sensors.items():
+                if sensor._location == "warm_side":
+                    warm_side_sensor = sensor
+                elif sensor._location == "cool_side":
+                    cool_side_sensor = sensor
 
     print()
     print("✅ Habitat configured successfully!")
@@ -279,6 +430,10 @@ def create_test_app():
     print(f"   Basking temp: {habitat.requirements.basking_temp_min}°C - {habitat.requirements.basking_temp_max}°C")
     print(f"   Cool temp: {habitat.requirements.cool_side_temp_min}°C - {habitat.requirements.cool_side_temp_max}°C")
     print(f"   Humidity: {habitat.requirements.humidity_min}% - {habitat.requirements.humidity_max}%")
+    if habitat.sensors:
+        print(f"   Sensors: {[s.sensor_id for s in habitat.sensors]}")
+    if habitat.power_strip:
+        print(f"   Power strip: {habitat.power_strip.strip_id} ({habitat.power_strip.ip})")
     print()
 
     # Show automation rules that were created
@@ -290,7 +445,7 @@ def create_test_app():
     print()
 
     # ═══════════════════════════════════════════════════════════
-    # STEP 4: Register habitat with Day/Night Service
+    # STEP 5: Register habitat with Day/Night Service
     # ═══════════════════════════════════════════════════════════
 
     # Collect daytime heating rule IDs (these will be disabled at night)
@@ -305,10 +460,6 @@ def create_test_app():
     sunrise = day_night_service.get_sunrise()
     sunset = day_night_service.get_sunset()
 
-    # Debug: show raw values
-    print(f"   DEBUG: Raw sunrise={sunrise}, sunset={sunset}")
-    print(f"   DEBUG: sunrise.tzinfo={sunrise.tzinfo}, sunset.tzinfo={sunset.tzinfo}")
-
     # Convert to local time for display
     try:
         from zoneinfo import ZoneInfo
@@ -316,7 +467,7 @@ def create_test_app():
         sunrise_local = sunrise.astimezone(local_tz)
         sunset_local = sunset.astimezone(local_tz)
     except Exception as e:
-        print(f"   DEBUG: Timezone conversion failed: {e}")
+        print(f"   Timezone conversion failed: {e}")
         sunrise_local = sunrise
         sunset_local = sunset
 
@@ -329,13 +480,16 @@ def create_test_app():
     return {
         'warm_side_sensor': warm_side_sensor,
         'cool_side_sensor': cool_side_sensor,
+        'all_sensors': all_sensors,
         'monitoring': monitoring_service,
         'automation': automation_service,
         'habitat': habitat_service,
         'sensor_repo': sensor_repo,
-        'outlet_controller': outlet_controller,
+        'outlet_controller': primary_outlet_controller,
+        'outlet_controllers': outlet_controllers,
         'day_night': day_night_service,
-        'habitat_obj': habitat
+        'habitat_obj': habitat,
+        'habitat_repo': habitat_repo
     }
 
 
@@ -359,6 +513,8 @@ def run_polling_loop():
     monitoring = app['monitoring']
     sensor_repo = app['sensor_repo']
     outlet_controller = app['outlet_controller']
+    habitat = app['habitat_obj']
+    habitat_id = habitat.habitat_id if habitat else None
 
     print("=" * 60)
     print("🔄 STARTING SENSOR POLLING LOOP")
@@ -385,50 +541,60 @@ def run_polling_loop():
             # Read from warm side sensor
             warm_temp = None
             warm_humidity = None
-            try:
-                warm_temp, warm_humidity = warm_side_sensor.read_temperature_and_humidity()
-                print(f"  🌡️  Warm side: {(warm_temp * 9 / 5) + 32:.1f}°F, {warm_humidity:.0f}% humidity")
+            if warm_side_sensor:
+                try:
+                    warm_temp, warm_humidity = warm_side_sensor.read_temperature_and_humidity()
+                    print(f"  🌡️  Warm side: {(warm_temp * 9 / 5) + 32:.1f}°F, {warm_humidity:.0f}% humidity")
 
-                # Process warm side temperature
-                monitoring.process_reading(
-                    sensor_id='basking-temp-sensor',
-                    value=warm_temp,
-                    timestamp=now,
-                    unit=SensorUnit.CELSIUS
-                )
-                # Process warm side humidity
-                monitoring.process_reading(
-                    sensor_id='basking-humidity-sensor',
-                    value=warm_humidity,
-                    timestamp=now,
-                    unit=SensorUnit.PERCENT
-                )
-            except ConnectionError as e:
-                print(f"  ❌ Warm side sensor failed: {e}")
+                    # Process warm side temperature
+                    monitoring.process_reading(
+                        sensor_id='basking-temp-sensor',
+                        value=warm_temp,
+                        timestamp=now,
+                        unit=SensorUnit.CELSIUS,
+                        habitat_id=habitat_id
+                    )
+                    # Process warm side humidity
+                    monitoring.process_reading(
+                        sensor_id='basking-humidity-sensor',
+                        value=warm_humidity,
+                        timestamp=now,
+                        unit=SensorUnit.PERCENT,
+                        habitat_id=habitat_id
+                    )
+                except ConnectionError as e:
+                    print(f"  ❌ Warm side sensor failed: {e}")
+            else:
+                print(f"  ⚠ No warm side sensor configured")
 
             # Read from cool side sensor
             cool_temp = None
             cool_humidity = None
-            try:
-                cool_temp, cool_humidity = cool_side_sensor.read_temperature_and_humidity()
-                print(f"  🌡️  Cool side: {(cool_temp * 9 / 5) + 32:.1f}°F, {cool_humidity:.0f}% humidity")
+            if cool_side_sensor:
+                try:
+                    cool_temp, cool_humidity = cool_side_sensor.read_temperature_and_humidity()
+                    print(f"  🌡️  Cool side: {(cool_temp * 9 / 5) + 32:.1f}°F, {cool_humidity:.0f}% humidity")
 
-                # Process cool side temperature
-                monitoring.process_reading(
-                    sensor_id='cool-temp-sensor',
-                    value=cool_temp,
-                    timestamp=now,
-                    unit=SensorUnit.CELSIUS
-                )
-                # Process cool side humidity
-                monitoring.process_reading(
-                    sensor_id='cool-humidity-sensor',
-                    value=cool_humidity,
-                    timestamp=now,
-                    unit=SensorUnit.PERCENT
-                )
-            except ConnectionError as e:
-                print(f"  ❌ Cool side sensor failed: {e}")
+                    # Process cool side temperature
+                    monitoring.process_reading(
+                        sensor_id='cool-temp-sensor',
+                        value=cool_temp,
+                        timestamp=now,
+                        unit=SensorUnit.CELSIUS,
+                        habitat_id=habitat_id
+                    )
+                    # Process cool side humidity
+                    monitoring.process_reading(
+                        sensor_id='cool-humidity-sensor',
+                        value=cool_humidity,
+                        timestamp=now,
+                        unit=SensorUnit.PERCENT,
+                        habitat_id=habitat_id
+                    )
+                except ConnectionError as e:
+                    print(f"  ❌ Cool side sensor failed: {e}")
+            else:
+                print(f"  ⚠ No cool side sensor configured")
 
             # Show outlet states
             heat_lamp_state = outlet_controller.get_state('basking-heat-lamp')

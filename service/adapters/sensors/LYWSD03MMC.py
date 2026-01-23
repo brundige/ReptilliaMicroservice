@@ -99,12 +99,20 @@ class LYWSD03MMCSensor(SensorHardwareInterface):
         Returns:
             Tuple of (temperature_celsius, humidity_percent)
         """
-        async with BleakClient(
+        client = BleakClient(
             self._device_address,
             timeout=self._connection_timeout
-        ) as client:
+        )
+        try:
+            await client.connect()
             data = await client.read_gatt_char(_TEMP_HUMIDITY_CHAR_UUID)
             return self._parse_sensor_data(data)
+        finally:
+            # Disconnect errors are non-fatal - we already have the data
+            try:
+                await client.disconnect()
+            except Exception:
+                pass  # Ignore D-Bus/disconnect errors
 
     @staticmethod
     def _parse_sensor_data(data: bytearray) -> tuple[float, float]:
@@ -175,3 +183,34 @@ class LYWSD03MMCSensor(SensorHardwareInterface):
     def last_error(self) -> Optional[str]:
         """Get the last error message, if any."""
         return self._last_error
+
+    @classmethod
+    def from_config(
+        cls,
+        config: 'SensorConfig',
+        connection_timeout: float = 30.0,
+        max_retries: int = 3,
+        retry_delay: float = 2.0
+    ) -> 'LYWSD03MMCSensor':
+        """
+        Factory method to create sensor from SensorConfig.
+
+        Args:
+            config: SensorConfig object from habitat configuration
+            connection_timeout: Timeout for BLE connection in seconds
+            max_retries: Number of connection attempts before giving up
+            retry_delay: Seconds to wait between retry attempts
+
+        Returns:
+            Configured LYWSD03MMCSensor instance
+        """
+        # Import here to avoid circular imports
+        from domain.models import SensorConfig
+        return cls(
+            device_address=config.ble_address,
+            sensor_id=config.sensor_id,
+            location=config.location.value,
+            connection_timeout=connection_timeout,
+            max_retries=max_retries,
+            retry_delay=retry_delay
+        )

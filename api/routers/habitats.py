@@ -17,7 +17,11 @@ from api.models.schemas import (
     IdealConditions,
     SensorStatusMap,
     SensorReadingsListResponse,
-    SensorReadingResponse
+    SensorReadingResponse,
+    SensorHardwareConfig,
+    OutletHardwareConfig,
+    PowerStripConfig,
+    SensorLocation
 )
 from api.models.enums import ReptileSpecies, ThresholdStatus, SensorUnit
 
@@ -42,16 +46,46 @@ def get_habitat(habitat_id: str, db: Database = Depends(get_db)):
 
 @router.post("", response_model=HabitatResponse, status_code=201)
 def create_habitat(habitat: HabitatCreate, db: Database = Depends(get_db)):
-    """Create a new habitat configuration."""
+    """Create a new habitat configuration with optional embedded hardware config."""
     # Check if habitat already exists
     existing = db.habitats.find_one({"habitat_id": habitat.habitat_id})
     if existing:
         raise HTTPException(status_code=409, detail="Habitat already exists")
 
+    # Build embedded sensors document
+    sensors_docs = []
+    if habitat.sensors:
+        for sensor in habitat.sensors:
+            sensors_docs.append({
+                "sensor_id": sensor.sensor_id,
+                "ble_address": sensor.ble_address,
+                "location": sensor.location.value,
+                "device_type": sensor.device_type
+            })
+
+    # Build embedded power_strip document
+    power_strip_doc = None
+    if habitat.power_strip:
+        outlets_docs = []
+        for outlet in habitat.power_strip.outlets:
+            outlets_docs.append({
+                "outlet_id": outlet.outlet_id,
+                "plug_number": outlet.plug_number
+            })
+        power_strip_doc = {
+            "strip_id": habitat.power_strip.strip_id,
+            "ip": habitat.power_strip.ip,
+            "username": habitat.power_strip.username,
+            "password": habitat.power_strip.password,
+            "outlets": outlets_docs
+        }
+
     doc = {
         "habitat_id": habitat.habitat_id,
         "name": habitat.name,
         "species": habitat.species.value,
+        "sensors": sensors_docs,
+        "power_strip": power_strip_doc,
         "basking_temp_sensor_id": habitat.sensor_config.basking_temp,
         "cool_temp_sensor_id": habitat.sensor_config.cool_temp,
         "humidity_sensor_id": habitat.sensor_config.humidity,
@@ -71,15 +105,45 @@ def update_habitat(
     habitat: HabitatCreate,
     db: Database = Depends(get_db)
 ):
-    """Update an existing habitat configuration."""
+    """Update an existing habitat configuration with optional hardware config."""
     existing = db.habitats.find_one({"habitat_id": habitat_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Habitat not found")
+
+    # Build embedded sensors document
+    sensors_docs = []
+    if habitat.sensors:
+        for sensor in habitat.sensors:
+            sensors_docs.append({
+                "sensor_id": sensor.sensor_id,
+                "ble_address": sensor.ble_address,
+                "location": sensor.location.value,
+                "device_type": sensor.device_type
+            })
+
+    # Build embedded power_strip document
+    power_strip_doc = None
+    if habitat.power_strip:
+        outlets_docs = []
+        for outlet in habitat.power_strip.outlets:
+            outlets_docs.append({
+                "outlet_id": outlet.outlet_id,
+                "plug_number": outlet.plug_number
+            })
+        power_strip_doc = {
+            "strip_id": habitat.power_strip.strip_id,
+            "ip": habitat.power_strip.ip,
+            "username": habitat.power_strip.username,
+            "password": habitat.power_strip.password,
+            "outlets": outlets_docs
+        }
 
     doc = {
         "habitat_id": habitat_id,
         "name": habitat.name,
         "species": habitat.species.value,
+        "sensors": sensors_docs,
+        "power_strip": power_strip_doc,
         "basking_temp_sensor_id": habitat.sensor_config.basking_temp,
         "cool_temp_sensor_id": habitat.sensor_config.cool_temp,
         "humidity_sensor_id": habitat.sensor_config.humidity,
@@ -211,17 +275,51 @@ def get_habitat_readings(
 
 def _doc_to_response(doc: dict) -> HabitatResponse:
     """Convert MongoDB document to response model."""
+    # Parse embedded sensors
+    sensors = None
+    if doc.get("sensors"):
+        sensors = [
+            SensorHardwareConfig(
+                sensor_id=s["sensor_id"],
+                ble_address=s["ble_address"],
+                location=SensorLocation(s["location"]),
+                device_type=s.get("device_type", "LYWSD03MMC")
+            )
+            for s in doc["sensors"]
+        ]
+
+    # Parse embedded power_strip
+    power_strip = None
+    if doc.get("power_strip"):
+        ps = doc["power_strip"]
+        outlets = [
+            OutletHardwareConfig(
+                outlet_id=o["outlet_id"],
+                plug_number=o["plug_number"]
+            )
+            for o in ps.get("outlets", [])
+        ]
+        power_strip = PowerStripConfig(
+            strip_id=ps["strip_id"],
+            ip=ps["ip"],
+            username=ps["username"],
+            password=ps["password"],
+            outlets=outlets
+        )
+
     return HabitatResponse(
         habitat_id=doc["habitat_id"],
         name=doc["name"],
         species=ReptileSpecies(doc["species"]),
-        basking_temp_sensor_id=doc["basking_temp_sensor_id"],
-        cool_temp_sensor_id=doc["cool_temp_sensor_id"],
-        humidity_sensor_id=doc["humidity_sensor_id"],
-        heat_lamp_outlet_id=doc["heat_lamp_outlet_id"],
+        basking_temp_sensor_id=doc.get("basking_temp_sensor_id", ""),
+        cool_temp_sensor_id=doc.get("cool_temp_sensor_id", ""),
+        humidity_sensor_id=doc.get("humidity_sensor_id", ""),
+        heat_lamp_outlet_id=doc.get("heat_lamp_outlet_id", ""),
         ceramic_heater_outlet_id=doc.get("ceramic_heater_outlet_id"),
         uvb_outlet_id=doc.get("uvb_outlet_id"),
-        humidifier_outlet_id=doc.get("humidifier_outlet_id")
+        humidifier_outlet_id=doc.get("humidifier_outlet_id"),
+        sensors=sensors,
+        power_strip=power_strip
     )
 
 
